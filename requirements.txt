@@ -1,0 +1,5 @@
+anthropic
+rich
+questionary
+sqlparse
+python-dotenv
