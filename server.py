@@ -46,15 +46,39 @@ ANALYTICAL_PATTERNS = [
     "rank", "percent", "ratio", "distribution", "which", "compare"
 ]
 
+GREETINGS = ["hi", "hello", "hey", "yo", "thanks", "thank", "bye"]
+
+PERSONA = (
+    "You are a friendly data analyst with a dry, light sense of humour. "
+    "Keep a casual tone with occasional playful sarcasm, "
+    "but never at the expense of accuracy. "
+)
+
+def is_greeting(query: str) -> bool:
+    """Check if the query is a short greeting or pleasantry rather than a data question."""
+    words = [w.strip("!,.?") for w in query.lower().split()]
+    return len(words) <= 4 and any(w in GREETINGS for w in words)
+
 def should_bypass_cache(query: str) -> bool:
     """Check if query should skip cache and always hit API fresh."""
     q = query.lower()
+    if is_greeting(q):
+        return True
     return any(pattern in q for pattern in BYPASS_PATTERNS + ANALYTICAL_PATTERNS)
 
 def needs_sql(query: str) -> bool:
     """Check if query needs SQL execution against full dataset."""
     q = query.lower()
     return any(pattern in q for pattern in ANALYTICAL_PATTERNS)
+
+def clean_sql(raw: str) -> str:
+    """Strip markdown code fences GPT sometimes wraps around generated SQL."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").strip()
+        if raw.lower().startswith("sql"):
+            raw = raw[3:]
+    return raw.strip()
 
 def generate_and_run_sql(query: str, schema_context: str, table_name: str) -> str:
     """
@@ -63,7 +87,7 @@ def generate_and_run_sql(query: str, schema_context: str, table_name: str) -> st
     2. Execute SQL against SQLite.
     3. Ask GPT to explain results in plain English.
     """
-    # step 1 — generate SQL
+    # step 1 — generate SQL (no persona here, SQL must be clean)
     sql_payload = json.dumps({
         "model": "gpt-4o-mini",
         "messages": [
@@ -72,7 +96,7 @@ def generate_and_run_sql(query: str, schema_context: str, table_name: str) -> st
                 "content": (
                     f"You are a SQL expert. Given this schema:\n{schema_context}\n\n"
                     f"The data is stored in a SQLite table called '{table_name}'. "
-                    "Generate ONLY a valid SQLite SQL query to answer the user's question. "
+                    "Generate ONLY a valid SQLite SELECT query to answer the user's question. "
                     "Return the SQL query and nothing else — no explanation, no markdown, no backticks."
                 )
             },
@@ -95,7 +119,7 @@ def generate_and_run_sql(query: str, schema_context: str, table_name: str) -> st
     try:
         with urllib.request.urlopen(sql_req) as res:
             sql_result = json.loads(res.read())
-            generated_sql = sql_result["choices"][0]["message"]["content"].strip()
+            generated_sql = clean_sql(sql_result["choices"][0]["message"]["content"])
             print(f"DEBUG: Generated SQL → {generated_sql}")
     except Exception as e:
         return f"Failed to generate SQL: {str(e)}"
@@ -119,8 +143,12 @@ def generate_and_run_sql(query: str, schema_context: str, table_name: str) -> st
             {
                 "role": "system",
                 "content": (
-                    "You are a database analyst. Explain the following SQL query results "
-                    "in plain English. Be direct and specific. No code snippets."
+                    PERSONA +
+                    "Explain the SQL query results below in plain English. "
+                    "Be direct and specific, and report the numbers exactly as given. "
+                    "Never change, round or invent data. "
+                    "Greet the user only if their question was a greeting. "
+                    "No code snippets."
                 )
             },
             {
@@ -331,11 +359,12 @@ class Handler(BaseHTTPRequestHandler):
 
         schema_context = build_schema_context()
         system = (
-            "You are a database analyst agent. "
-            "You have been provided a schema and sample data below. "
-            "Answer all questions in the context of this dataset only. "
-            "Reason from the schema, column names, data types, and sample rows to give useful insights. "
-            "Be direct and specific.\n\n"
+            PERSONA +
+            "Greet the user only when they greet you first, and make them feel heard. "
+            "Answer in the context of the schema and sample data below, "
+            "with specific, actionable insights. "
+            "Never invent tables or columns that are not in the schema. "
+            "Flag anomalies, suggest optimisations, and explain relationships clearly.\n\n"
             + schema_context
         )
 
