@@ -116,6 +116,4 @@ PII masking happens at the schema level — the actual column structure is prese
 
 ---
 
-## license
 
-MIT
